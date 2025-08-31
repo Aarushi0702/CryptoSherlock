@@ -1,0 +1,18 @@
+{
+  "btc": {
+    "1DEP8i3QJCsomS4BSMY2RpU1upv62aGvhD": "Binance BTC Deposit",
+    "1FfmbHfnpaZjKFvyi1okTjJJusN455paPH": "Coinbase BTC Deposit",
+    "1BoatSLRHtKNngkdXEeobR76b53LETtpyT": "Binance Hot Wallet",
+    "3BMEXnJjQMwMKftYk1fDgTJ5iWPQe8KNBg": "BitMEX Hot Wallet",
+    "bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjvxtu": "Kraken Deposit",
+    "1Kr6QSydW9bFQG1mXiPNNu6WpJGmUa9i1g": "Bitfinex Hot Wallet"
+  },
+  "eth": {
+    "0x742d35Cc6634C0532925a3b844Bc454e4438f44e": "Binance ETH Hot Wallet",
+    "0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0": "Coinbase ETH Hot Wallet",
+    "0xd551234Ae421e3BCBA99A0Da6d736074f22192FF": "Binance ETH 2",
+    "0x503828976D22510aad0201ac7EC88293211D23Da": "Kraken ETH Hot Wallet",
+    "0x876EabF441B2EE5B5b0554Fd502a8E0600950cFa": "Bitfinex ETH Hot Wallet",
+    "0xA910f92ACdAf488fa6eF02174fb86208Ad7722ba": "Huobi ETH Hot Wallet"
+  }
+}
