@@ -524,9 +524,6 @@ def display_dashboard():
                 if st.button("📄 Export SAR"):
                     generate_and_download_sar()
 
-# Add all the other display functions (display_peel_chain_analysis, etc.) here
-# [Rest of the original functions remain unchanged]
-
 def display_peel_chain_analysis():
     st.header("⛓️ Peel Chain Money Laundering")
     st.subheader("Pattern Explanation")
@@ -788,7 +785,7 @@ def display_coinjoin_analysis():
                 export_pattern_assets(coinjoin_subgraph, fig, "coinjoin", target_address, detection_results)
         
         elif coinjoin_tx:
-            # Original logic for when we have a proper coinjoin transaction
+           
             transaction_data = {
                 'inputs': coinjoin_tx.inputs if hasattr(coinjoin_tx, 'inputs') else [],
                 'outputs': coinjoin_tx.outputs if hasattr(coinjoin_tx, 'outputs') else []
@@ -1237,3 +1234,4 @@ def export_graph_data():
 
 if __name__ == "__main__":
     main()
+
