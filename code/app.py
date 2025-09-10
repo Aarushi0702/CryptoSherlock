@@ -1,6 +1,3 @@
-# CryptoSherlock X - Live Edition: Cryptocurrency Forensics with Pattern Detection
-# Main Streamlit application for detecting money laundering patterns in blockchain transactions
-
 import streamlit as st
 import pandas as pd
 import json
@@ -15,7 +12,7 @@ from clustering import EntityClusterer
 import tempfile
 import os
 
-# Optional chain hopping modules (cross-chain analysis)
+# Import chain hopping modules
 try:
     from chain_hop import detect_chain_hop, load_known_entities, ChainHopEvent
     from eth_api import fetch_ethereum_transactions, generate_synthetic_ethereum_transactions
@@ -23,22 +20,14 @@ try:
 except ImportError:
     CHAIN_HOP_AVAILABLE = False
 
-# Filters transaction graph edges to include only those within specified time window
 def filter_graph_by_time(graph, start_dt, end_dt):
     import networkx as nx
     import pandas as pd
-    
-    # Create new filtered graph
     Gf = nx.DiGraph()
-    # Copy all nodes
     for n, d in graph.nodes(data=True):
         Gf.add_node(n, **d)
-    
-    # Convert time boundaries to pandas datetime
     s = pd.to_datetime(start_dt, utc=True) if start_dt else None
     e = pd.to_datetime(end_dt, utc=True) if end_dt else None
-    
-    # Filter edges based on timestamp
     for u, v, ed in graph.edges(data=True):
         ts = ed.get('timestamp')
         if not ts:
@@ -46,65 +35,46 @@ def filter_graph_by_time(graph, start_dt, end_dt):
         t = pd.to_datetime(ts, errors='coerce', utc=True)
         if pd.isna(t):
             continue
-        # Include edge if timestamp is within window
         if (s is None or t >= s) and (e is None or t <= e):
             Gf.add_edge(u, v, **ed)
-    
     return Gf
 
-# Computes aggregated risk decision for entity clusters by running all detectors
 def compute_cluster_decision(graph, member_nodes):
-    # List of all available pattern detection algorithms
     patterns = ['peel_chain', 'structuring', 'rapid_movement', 'layering', 'tf_crowdfunding']
     if CHAIN_HOP_AVAILABLE:
         patterns.append('chain_hopping')
-    
-    # Initialize empty results for each pattern
     aggregated = {p: {'pattern': p, 'confidence': 0.0, 'explanation': '', 'evidence': {}} for p in patterns}
-    
-    # Run detection on each node in the cluster
     for node in member_nodes:
-        # Peel chain detection
         try:
             res = st.session_state.detector.detect_peel_chain(graph, node)
             if res.get('confidence', 0) > aggregated['peel_chain']['confidence']:
                 aggregated['peel_chain'] = res
         except Exception:
             pass
-            
-        # Structuring detection
         try:
             res = st.session_state.detector.detect_structuring(graph, node)
             if res.get('confidence', 0) > aggregated['structuring']['confidence']:
                 aggregated['structuring'] = res
         except Exception:
             pass
-            
-        # Rapid movement detection
         try:
             res = st.session_state.detector.detect_rapid_movement(graph, node)
             if res.get('confidence', 0) > aggregated['rapid_movement']['confidence']:
                 aggregated['rapid_movement'] = res
         except Exception:
             pass
-            
-        # Layering detection
         try:
             res = st.session_state.detector.detect_layering(graph, node)
             if res.get('confidence', 0) > aggregated['layering']['confidence']:
                 aggregated['layering'] = res
         except Exception:
             pass
-            
-        # TF crowdfunding detection
         try:
             res = st.session_state.detector.detect_tf_crowdfunding(graph, node)
             if res.get('confidence', 0) > aggregated['tf_crowdfunding']['confidence']:
                 aggregated['tf_crowdfunding'] = res
         except Exception:
             pass
-    
-        # Chain hopping detection (if available)
         if CHAIN_HOP_AVAILABLE:
             try:
                 res = st.session_state.detector.detect_chain_hopping(
@@ -114,32 +84,21 @@ def compute_cluster_decision(graph, member_nodes):
                     aggregated['chain_hopping'] = res
             except Exception:
                 pass
-    
-    # Compute final risk score from aggregated results
     score, level, summary = st.session_state.scorer.compute_risk_score(aggregated)
     return score, level, summary, aggregated
 
-# Provides export functionality for pattern analysis results
 def export_pattern_assets(subgraph, fig, pattern_name, target_address, detection_result):
-    # Calculate risk score for this specific pattern
     risk_score, risk_level, _ = st.session_state.scorer.compute_risk_score({pattern_name: detection_result})
-    
-    # Generate exportable JSON representation of the graph
     graph_json = st.session_state.asset_exporter.build_graph_json(subgraph)
-    # Generate detailed pattern analysis report
     pattern_report = st.session_state.asset_exporter.generate_pattern_report(
         pattern_name, target_address, risk_score, risk_level, detection_result
     )
-    
-    # Export graph as JSON download
     st.download_button(
         label="📈 Export Pattern Graph (JSON)",
         data=graph_json,
         file_name=f"{pattern_name}_graph_{target_address}.json",
         mime="application/json"
     )
-    
-    # Export complete bundle (graph + report + visualization)
     bundle_bytes = st.session_state.asset_exporter.build_zip_bundle(graph_json, pattern_report, fig)
     st.download_button(
         label="📦 Download Pattern Bundle (Graph + Explanation)",
@@ -148,16 +107,92 @@ def export_pattern_assets(subgraph, fig, pattern_name, target_address, detection
         mime="application/zip"
     )
 
-# Main Streamlit application function - handles UI setup and data flow
+def display_alerts():
+    """Display alerts for illegal transactions on the dashboard"""
+    if not st.session_state.graph:
+        return
+    
+    # Check for illegal transaction alerts
+    illegal_alerts = st.session_state.monitor.check_illegal_transactions_alerts(
+        st.session_state.graph, 
+        st.session_state.detector,
+        st.session_state.scorer
+    )
+    
+    if illegal_alerts:
+        st.error("🚨 **SECURITY ALERTS**")
+        
+        # Create alert container
+        alert_container = st.container()
+        with alert_container:
+            cols = st.columns([3, 1])
+            
+            with cols[0]:
+                st.subheader(f"⚠️ {len(illegal_alerts)} Illegal Transaction(s) Detected")
+                
+                for alert in illegal_alerts:
+                    with st.expander(f"🔴 {alert['message']}", expanded=True):
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Risk Level", alert['risk_level'])
+                        with col2:
+                            st.metric("Risk Score", f"{alert['risk_score']:.3f}")
+                        with col3:
+                            st.metric("Address", alert['address'][:12] + "...")
+                        
+                        if alert['patterns']:
+                            st.write("**Detected Patterns:**")
+                            for pattern in alert['patterns']:
+                                st.write(f"• {pattern.replace('_', ' ').title()}")
+                        
+                        st.write(f"**Detected at:** {alert['timestamp']}")
+            
+            with cols[1]:
+                st.metric("Total Alerts", len(illegal_alerts))
+                if st.button("🔕 Acknowledge Alerts"):
+                    st.success("Alerts acknowledged!")
+    
+    # Also check for recent watchlist alerts
+    recent_alerts = st.session_state.monitor.get_recent_alerts(hours=24)
+    high_risk_alerts = [alert for alert in recent_alerts if alert.get('risk_level') == 'HIGH']
+    
+    if high_risk_alerts:
+        st.warning(f"⚠️ {len(high_risk_alerts)} High-Risk Watchlist Alert(s) in Last 24h")
+        with st.expander("View High-Risk Alerts"):
+            for alert in high_risk_alerts[-3:]:  # Show last 3
+                st.write(f"• **{alert['address'][:16]}...** - Risk: {alert['risk_level']} ({alert['risk_score']:.3f})")
+
+def display_graph_statistics():
+    """Display graph statistics in the sidebar"""
+    if not st.session_state.graph:
+        return
+    
+    st.subheader("📊 Graph Statistics")
+    num_nodes = st.session_state.graph.number_of_nodes()
+    num_edges = st.session_state.graph.number_of_edges()
+    
+    st.metric("Addresses", num_nodes)
+    st.metric("Transactions", num_edges)
+    
+    # Classification breakdown
+    classifications = {}
+    for node, data in st.session_state.graph.nodes(data=True):
+        classification = data.get('classification', 'unknown')
+        classifications[classification] = classifications.get(classification, 0) + 1
+    
+    st.write("**Classification Breakdown:**")
+    for classification, count in classifications.items():
+        st.write(f"• {classification.title()}: {count}")
+
 def main():
-    # Configure Streamlit page settings
     st.set_page_config(
         page_title="CryptoSherlock X - Live Edition",
         page_icon="🔍",
         layout="wide"
     )
 
-    # Initialize all session state objects for the application
+    # Initialize session state
     if 'data_loader' not in st.session_state:
         st.session_state.data_loader = DataLoader(demo_mode=True)
         st.session_state.graph_builder = GraphBuilder()
@@ -178,11 +213,10 @@ def main():
         st.session_state.view_time_range = None
         st.session_state.data_source = "synthetic"
 
-    # Main page title and description
     st.title("🔍 CryptoSherlock X - Live Edition")
     st.markdown("*Explainable Cryptocurrency Forensics with Live Blockchain Data & Cross-Chain Analysis*")
 
-    # Sidebar: Data source selection and configuration
+    # Enhanced sidebar with chain hopping
     with st.sidebar:
         st.markdown("### 📊 Data Source")
         data_source = st.selectbox(
@@ -196,7 +230,7 @@ def main():
             }[x]
         )
 
-        # Chain hopping detection configuration (cross-chain analysis)
+        # Chain hopping data section
         if CHAIN_HOP_AVAILABLE:
             st.markdown("### ⛓️ Chain Hopping Detection")
             enable_chain_hop = st.checkbox("🔗 Enable Cross-Chain Analysis", value=True)
@@ -210,14 +244,12 @@ def main():
                     }[x]
                 )
 
-                # Ethereum live data configuration
                 if eth_source == "live_etherscan":
                     eth_address = st.text_input(
                         "Ethereum Address:",
                         placeholder="0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
                         help="Enter Ethereum address for cross-chain analysis"
                     )
-
                     etherscan_api_key = st.text_input(
                         "Etherscan API Key:",
                         placeholder="YourApiKeyToken",
@@ -228,43 +260,34 @@ def main():
             st.warning("⚠️ Chain hopping modules not available. Install dependencies.")
             enable_chain_hop = False
 
-        # Live Bitcoin API data loading interface
+        # Data loading section
         if data_source in ["live_api", "live_multi"]:
             if data_source == "live_api":
-                # Single address input
                 address_input = st.text_input(
                     "Bitcoin Address:",
                     placeholder="1DEP8i3QJCsomS4BSMY2RpU1upv62aGvhD",
                     help="Enter a Bitcoin address to analyze"
                 )
-            else:
-                # Multiple addresses input
+            else: # live_multi
                 address_input = st.text_area(
                     "Bitcoin Addresses (one per line or comma-separated):",
                     placeholder="1DEP8i3QJCsomS4BSMY2RpU1upv62aGvhD\n1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
                     help="Enter multiple Bitcoin addresses to analyze"
                 )
 
-            # Transaction limit slider
             transaction_limit = st.slider("Max transactions per address:", 10, 100, 50)
-            
-            # Fetch live data button
             if st.button("🔄 Fetch Live Data"):
                 if address_input:
                     with st.spinner("Fetching live blockchain data..."):
                         try:
-                            # Handle multiple addresses format
                             if data_source == "live_multi":
                                 addresses = [addr.strip() for addr in address_input.replace('\n', ',').split(',') if addr.strip()]
                                 address_input = ','.join(addresses)
-                            
-                            # Load transactions from live API
                             st.session_state.transactions = st.session_state.data_loader.load_dataset(
                                 source=data_source,
                                 address=address_input,
                                 limit=transaction_limit
                             )
-                            
                             if st.session_state.transactions:
                                 st.success(f"✅ Loaded {len(st.session_state.transactions)} live transactions!")
                                 st.session_state.data_source = data_source
@@ -274,39 +297,33 @@ def main():
                             st.error(f"Error fetching live data: {e}")
                             st.info("Falling back to synthetic data...")
 
-        # CSV file upload interface
         elif data_source == "file":
             uploaded_file = st.file_uploader("Upload CSV file", type=['csv'])
             if uploaded_file:
                 if st.button("📁 Load File"):
                     with st.spinner("Loading file..."):
-                        # Save uploaded file to temporary location
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
                             tmp_file.write(uploaded_file.getvalue())
                             tmp_file_path = tmp_file.name
-                        
-                        # Load transactions from file
                         st.session_state.transactions = st.session_state.data_loader.load_dataset(
                             source="file",
                             filepath=tmp_file_path
                         )
                         st.success(f"✅ Loaded {len(st.session_state.transactions)} transactions from file!")
                         st.session_state.data_source = data_source
-                        
-                        # Clean up temporary file
                         try:
                             os.unlink(tmp_file_path)
                         except:
                             pass
 
-        # Synthetic demo data loading (default/fallback)
+        # Load synthetic data by default
         if not st.session_state.transactions or data_source == "synthetic":
             if st.button("🎭 Load Synthetic Demo Data") or not st.session_state.transactions:
                 with st.spinner("Generating synthetic dataset..."):
                     st.session_state.transactions = st.session_state.data_loader.load_dataset(source="synthetic")
                     st.session_state.data_source = "synthetic"
 
-        # Ethereum data loading for cross-chain analysis
+        # Load Ethereum transactions for chain hopping
         if CHAIN_HOP_AVAILABLE and 'enable_chain_hop' in locals() and enable_chain_hop:
             if eth_source == "synthetic":
                 if st.button("🎭 Load Synthetic ETH Data"):
@@ -323,7 +340,7 @@ def main():
                         except Exception as e:
                             st.error(f"Error fetching ETH data: {e}")
 
-            # Chain hopping event detection
+            # Detect chain hopping events
             if st.session_state.transactions and st.session_state.eth_transactions:
                 if st.button("🔍 Detect Chain Hopping"):
                     try:
@@ -334,7 +351,6 @@ def main():
                             known_entities,
                             time_window_hours=24
                         )
-                        
                         if st.session_state.chain_hop_events:
                             st.success(f"⚠️ Detected {len(st.session_state.chain_hop_events)} chain hopping events!")
                         else:
@@ -342,7 +358,7 @@ def main():
                     except Exception as e:
                         st.error(f"Chain hopping detection failed: {e}")
 
-        # Cache management for live API data
+        # Cache management
         if st.session_state.data_source in ["live_api", "live_multi"]:
             st.markdown("### 🗂️ Cache Management")
             cache_info = st.session_state.data_loader.get_cache_info()
@@ -351,7 +367,7 @@ def main():
                 st.session_state.data_loader.clear_cache()
                 st.success("Cache cleared!")
 
-        # Current data status display
+        # Data source indicator
         st.markdown("### 📈 Current Data")
         data_source_icons = {
             "synthetic": "🎭",
@@ -360,33 +376,28 @@ def main():
             "file": "📁"
         }
         st.info(f"{data_source_icons.get(st.session_state.data_source, '❓')} **{st.session_state.data_source.replace('_', ' ').title()}**")
-        
-        # Display transaction metrics
         if st.session_state.transactions:
             st.metric("Total Transactions", len(st.session_state.transactions))
             if st.session_state.data_source in ["live_api", "live_multi"]:
                 live_count = sum(1 for tx in st.session_state.transactions if hasattr(tx, 'meta') and tx.meta.get('live_data'))
                 st.metric("Live Transactions", live_count)
-        
-        # Display Ethereum and chain hopping metrics
         if CHAIN_HOP_AVAILABLE and st.session_state.eth_transactions:
             st.metric("ETH Transactions", len(st.session_state.eth_transactions))
-        
         if CHAIN_HOP_AVAILABLE and st.session_state.chain_hop_events:
             st.metric("Chain Hop Events", len(st.session_state.chain_hop_events))
 
-    # Build transaction graph from loaded data
+    # Build graph from loaded transactions
     if st.session_state.transactions:
         st.session_state.graph = st.session_state.graph_builder.build_address_graph(
             st.session_state.transactions
         )
 
-    # Additional sidebar view options
+    # Rest of sidebar controls
     with st.sidebar:
         st.markdown("### 🎛️ View Options")
         st.session_state.view_enable_cluster = st.checkbox("👥 Entity clustering", value=False)
 
-        # Time range filter slider
+        # Time range filter
         if st.session_state.transactions:
             all_ts = [tx.timestamp for tx in st.session_state.transactions if tx.timestamp]
             if all_ts:
@@ -405,163 +416,67 @@ def main():
                     now = datetime.utcnow()
                     st.session_state.view_time_range = (now - timedelta(days=1), now)
 
-        # Entity clustering computation
-        if st.session_state.view_enable_cluster and st.session_state.transactions and st.session_state.graph:
-            st.session_state.cluster_map = st.session_state.clusterer.build_clusters(st.session_state.transactions)
-            st.session_state.cluster_graph = st.session_state.clusterer.collapse_to_cluster_graph(
-                st.session_state.graph, st.session_state.cluster_map
-            )
+    # Clustering
+    if st.session_state.view_enable_cluster and st.session_state.transactions and st.session_state.graph:
+        st.session_state.cluster_map = st.session_state.clusterer.build_clusters(st.session_state.transactions)
+        st.session_state.cluster_graph = st.session_state.clusterer.collapse_to_cluster_graph(
+            st.session_state.graph, st.session_state.cluster_map
+        )
 
-    # Main content area: Tabbed interface for different pattern analyses
+    # Enhanced main tabs with Chain Hopping
     tab_names = [
         "🏠 Dashboard",
-        "⛓️ Peel Chain", 
+        "⛓️ Peel Chain",
         "💸 Structuring",
         "🌀 CoinJoin",
         "⚡ Rapid Movement",
         "🕸️ Layering",
         "💰 TF Crowdfunding"
     ]
-
-    # Add chain hopping tab if available
     if CHAIN_HOP_AVAILABLE:
         tab_names.append("🔗 Chain Hopping")
 
     tabs = st.tabs(tab_names)
 
-    # Display content for each tab
-    with tabs[0]:  # Dashboard
+    with tabs[0]: # Dashboard
         display_dashboard()
-
-    with tabs[1]:  # Peel Chain
+    with tabs[1]: # Peel Chain
         display_peel_chain_analysis()
-
-    with tabs[2]:  # Structuring  
+    with tabs[2]: # Structuring
         display_structuring_analysis()
-
-    with tabs[3]:  # CoinJoin
+    with tabs[3]: # CoinJoin
         display_coinjoin_analysis()
-
-    with tabs[4]:  # Rapid Movement
+    with tabs[4]: # Rapid Movement
         display_rapid_movement_analysis()
-
-    with tabs[5]:  # Layering
+    with tabs[5]: # Layering
         display_layering_analysis()
-
-    with tabs[6]:  # TF Crowdfunding
+    with tabs[6]: # TF Crowdfunding
         display_tf_crowdfunding_analysis()
-
-    # Chain hopping tab (if available)
     if CHAIN_HOP_AVAILABLE and len(tabs) > 7:
-        with tabs[7]:
+        with tabs[7]: # Chain Hopping
             display_chain_hopping_analysis()
 
-# Displays UI and analysis for chain hopping (cross-chain money laundering) detection
-def display_chain_hopping_analysis():
-    st.header("🔗 Cross-Chain Money Laundering")
-    
-    # Pattern explanation
-    st.subheader("Pattern Explanation")
-    st.write("""
-    Chain hopping involves:
-    1) Moving funds from Bitcoin to an exchange/bridge,
-    2) Converting BTC to ETH (or other cryptocurrencies),
-    3) Moving the converted funds to different addresses,
-    4) Using multiple blockchains to obfuscate the money trail.
-    """)
-
-    # Check if chain hopping events were detected
-    if not st.session_state.chain_hop_events:
-        st.warning("⚠️ No chain hopping events detected. Enable cross-chain analysis in the sidebar and load both Bitcoin and Ethereum data.")
-        return
-
-    st.subheader(f"🔍 Detected Events ({len(st.session_state.chain_hop_events)})")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Create table of detected chain hopping events
-        events_data = []
-        for event in st.session_state.chain_hop_events:
-            try:
-                btc_time = event.btc_time if hasattr(event.btc_time, 'isoformat') else pd.to_datetime(event.btc_time)
-                eth_time = event.eth_time if hasattr(event.eth_time, 'isoformat') else pd.to_datetime(event.eth_time)
-                time_gap = abs((eth_time - btc_time).total_seconds() / 3600)
-                
-                events_data.append({
-                    'BTC Transaction': event.btc_txid[:16] + '...' if event.btc_txid else 'N/A',
-                    'BTC → Exchange': event.btc_out_addr[:16] + '...' if event.btc_out_addr else 'N/A',
-                    'Exchange → ETH': event.eth_in_addr[:16] + '...' if event.eth_in_addr else 'N/A',
-                    'Time Gap (hours)': round(time_gap, 2),
-                    'Route': event.label if hasattr(event, 'label') else 'Unknown'
-                })
-            except Exception as e:
-                st.error(f"Error processing event: {e}")
-                continue
-
-        if events_data:
-            df = pd.DataFrame(events_data)
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.warning("No valid event data to display")
-
-        # Placeholder for future cross-chain visualization
-        st.subheader("Cross-Chain Flow Visualization")
-        st.info("🚧 Advanced cross-chain visualization coming soon. Current detection shows exchange routing patterns.")
-
-    with col2:
-        # Pattern analysis for specific target address
-        st.subheader("🎯 Pattern Analysis")
-        
-        target_address = st.text_input("Target Address:", value="1DEP8i3QJCsomS4BSMY2RpU1upv62aGvhD")
-        
-        if target_address:
-            # Run chain hopping detection
-            detection_results = st.session_state.detector.detect_chain_hopping(
-                st.session_state.chain_hop_events,
-                target_address
-            )
-
-            # Calculate and display risk metrics
-            risk_score, risk_level, _ = st.session_state.scorer.compute_risk_score({'chain_hopping': detection_results})
-            icon, level_text = {'LOW': ('🟢', 'Low'), 'MEDIUM': ('🟡', 'Medium'), 'HIGH': ('🔴', 'High')}.get(risk_level, ('⚪', 'Unknown'))
-            
-            st.markdown(f"### Risk Level: {icon} **{level_text}**")
-            st.metric("Risk Score", f"{risk_score:.3f}")
-            st.metric("Confidence", f"{detection_results['confidence']:.3f}")
-
-            # Display evidence
-            st.subheader("🔍 Evidence")
-            if detection_results.get('evidence'):
-                st.json(detection_results['evidence'])
-
-            # Display explanation
-            st.subheader("📄 Explanation")
-            st.info(detection_results['explanation'])
-
-# Displays main dashboard with complete transaction network overview
 def display_dashboard():
     if not st.session_state.graph:
         st.warning("No data loaded")
         return
 
-    # Apply time filtering to graph
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        # Main transaction network visualization
         st.subheader("Complete Transaction Network")
         positions = st.session_state.graph_builder.compute_layout(filtered_graph)
-        
         fig = st.session_state.visualizer.create_plotly_graph(
             filtered_graph, positions, "Complete Transaction Flow Network"
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Entity cluster visualization (if enabled)
+        # ADD ALERT SYSTEM HERE
+        display_alerts()
+
         if st.session_state.view_enable_cluster and st.session_state.cluster_graph is not None:
             st.subheader("Entity Cluster Network")
             c_filtered = filter_graph_by_time(st.session_state.cluster_graph, start_dt, end_dt)
@@ -570,37 +485,28 @@ def display_dashboard():
             st.plotly_chart(cfig, use_container_width=True)
 
     with col2:
-        # Graph statistics
         display_graph_statistics()
 
-        # Chain hopping summary (if available)
+        # Chain hopping summary
         if CHAIN_HOP_AVAILABLE and st.session_state.chain_hop_events:
             st.subheader("🔗 Chain Hopping Summary")
             st.metric("Cross-Chain Events", len(st.session_state.chain_hop_events))
 
-        # Cluster risk analysis (if clustering enabled)
         if st.session_state.view_enable_cluster and st.session_state.cluster_graph is not None:
             st.subheader("👥 Cluster Risk Decision")
             seed = st.text_input("Seed address (belongs to a cluster)", value="")
-            
             if seed and seed in st.session_state.cluster_map:
                 cid = st.session_state.cluster_map[seed]
                 members = {n for n, cid2 in st.session_state.cluster_map.items() if cid2 == cid}
                 score, level, summary, aggregated = compute_cluster_decision(st.session_state.graph, members)
-                
                 st.markdown(f"### Cluster ID: `{cid}` • Members: {len(members)}")
                 st.metric("Cluster Risk Score", f"{score:.3f}")
                 st.metric("Cluster Risk Level", level)
-                
-                # Show detailed evidence
                 with st.expander("Aggregated Pattern Evidence"):
                     st.json(aggregated)
-
-                # Generate and download SAR report for cluster
                 sar_report = st.session_state.sar_generator.generate_sar_report(
                     address=f"cluster:{cid}", risk_summary=summary, detection_results=aggregated
                 )
-                
                 st.download_button(
                     "📄 Download Cluster SAR",
                     data=json.dumps(sar_report, indent=2),
@@ -608,24 +514,21 @@ def display_dashboard():
                     mime="application/json"
                 )
 
-        # Export options
         st.subheader("📊 Export Options")
         col_a, col_b = st.columns(2)
-        
         with col_a:
             if st.button("📈 Export Graph"):
                 export_graph_data()
-        
         with col_b:
             if 'analysis_results' in st.session_state:
                 if st.button("📄 Export SAR"):
                     generate_and_download_sar()
 
-# Displays UI and analysis for peel chain money laundering detection
+# Add all the other display functions (display_peel_chain_analysis, etc.) here
+# [Rest of the original functions remain unchanged]
+
 def display_peel_chain_analysis():
     st.header("⛓️ Peel Chain Money Laundering")
-    
-    # Pattern explanation
     st.subheader("Pattern Explanation")
     st.write("""
     Peel Chain is a money laundering technique where criminals:
@@ -635,14 +538,12 @@ def display_peel_chain_analysis():
     4) Each hop reduces the amount, making tracking difficult.
     """)
 
-    # Filter graph by time window
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
-    # Find peel chain transactions in time window
+    # Show transactions involved
     win_start = pd.to_datetime(start_dt, utc=True) if start_dt else None
     win_end = pd.to_datetime(end_dt, utc=True) if end_dt else None
-    
     peel_transactions = []
     for tx in st.session_state.transactions:
         if ('peel_addr' in tx.from_address or 'peel_addr' in tx.to_address):
@@ -650,7 +551,6 @@ def display_peel_chain_analysis():
             if (not pd.isna(tt)) and (win_start is None or tt >= win_start) and (win_end is None or tt <= win_end):
                 peel_transactions.append(tx)
 
-    # Display transactions table
     st.subheader(f"📋 Transactions Involved ({len(peel_transactions)})")
     if peel_transactions:
         st.dataframe(pd.DataFrame([{
@@ -667,59 +567,41 @@ def display_peel_chain_analysis():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Pattern visualization
         st.subheader("Pattern Visualization")
         peel_addresses = [addr for addr in filtered_graph.nodes() if addr.startswith('peel_addr_')]
         peel_subgraph = None
         fig = None
-
         if peel_addresses:
             peel_subgraph = filtered_graph.subgraph(peel_addresses).copy()
             positions = st.session_state.graph_builder.compute_layout(peel_subgraph)
-            
             fig = st.session_state.visualizer.create_plotly_graph(
                 peel_subgraph, positions, "Peel Chain Pattern - Static Visualization"
             )
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Pattern analysis
         st.subheader("🎯 Pattern Analysis")
         target_address = "peel_addr_0"
-        
         if target_address in filtered_graph.nodes():
-            # Run peel chain detection
             detection_results = st.session_state.detector.detect_peel_chain(filtered_graph, target_address)
             risk_score, risk_level, _ = st.session_state.scorer.compute_risk_score({'peel_chain': detection_results})
-            
-            # Display risk level with colored icon
             icon, level_text = {'LOW': ('🟢', 'Low'), 'MEDIUM': ('🟡', 'Medium'), 'HIGH': ('🔴', 'High')}.get(risk_level, ('⚪', 'Unknown'))
-            
             st.markdown(f"### Risk Level: {icon} **{level_text}**")
             st.metric("Risk Score", f"{risk_score:.3f}")
             st.metric("Confidence", f"{detection_results['confidence']:.3f}")
-
-            # Display evidence
             st.subheader("🔍 Evidence")
             if detection_results.get('evidence'):
                 st.json(detection_results['evidence'])
-
-            # Display explanation
             st.subheader("📄 Explanation")
             st.info(detection_results['explanation'])
-
-            # Export options
             if peel_subgraph is not None and fig is not None:
                 export_pattern_assets(peel_subgraph, fig, "peel_chain", target_address, detection_results)
         else:
             st.warning("⚠️ No peel chain addresses found for analysis.")
             st.info("Peel chain patterns require sequential address transfers. Load data containing peel chain transactions to see analysis.")
-
-# Displays UI and analysis for structuring (smurfing) detection
 def display_structuring_analysis():
     st.header("💸 Structuring (Smurfing) Detection")
     
-    # Pattern explanation
     st.subheader("Pattern Explanation")
     st.write("""
     Structuring (Smurfing) involves:
@@ -729,10 +611,10 @@ def display_structuring_analysis():
     4) Deposits target the same destination address.
     """)
 
-    # Filter graph and find relevant transactions
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
+    # Show transactions involved
     win_start = pd.to_datetime(start_dt, utc=True) if start_dt else None
     win_end = pd.to_datetime(end_dt, utc=True) if end_dt else None
     
@@ -743,7 +625,6 @@ def display_structuring_analysis():
             if (not pd.isna(tt)) and (win_start is None or tt >= win_start) and (win_end is None or tt <= win_end):
                 struct_transactions.append(tx)
 
-    # Display transactions table
     st.subheader(f"📋 Transactions Involved ({len(struct_transactions)})")
     if struct_transactions:
         st.dataframe(pd.DataFrame([{
@@ -760,7 +641,6 @@ def display_structuring_analysis():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Pattern visualization
         st.subheader("Pattern Visualization")
         struct_addresses = [addr for addr in filtered_graph.nodes() if ('donor_' in addr or 'struct_target' in addr)]
         struct_subgraph = None
@@ -776,7 +656,6 @@ def display_structuring_analysis():
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Pattern analysis
         st.subheader("🎯 Pattern Analysis")
         target_address = "struct_target_001"
         
@@ -803,11 +682,9 @@ def display_structuring_analysis():
             st.warning("⚠️ No structuring target addresses found for analysis.")
             st.info("Structuring patterns require multiple donors sending to same target. Load data containing structuring transactions to see analysis.")
 
-# Displays UI and analysis for CoinJoin mixing detection  
 def display_coinjoin_analysis():
     st.header("🌀 CoinJoin Mixing Detection")
     
-    # Pattern explanation
     st.subheader("Pattern Explanation")
     st.write("""
     CoinJoin is a privacy technique that:
@@ -817,10 +694,10 @@ def display_coinjoin_analysis():
     4) Obscures the transaction trail for participants.
     """)
 
-    # Filter and find CoinJoin transactions
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
+    # Show transactions involved
     win_start = pd.to_datetime(start_dt, utc=True) if start_dt else None
     win_end = pd.to_datetime(end_dt, utc=True) if end_dt else None
     
@@ -832,7 +709,6 @@ def display_coinjoin_analysis():
             if (not pd.isna(tt)) and (win_start is None or tt >= win_start) and (win_end is None or tt <= win_end):
                 coinjoin_transactions.append(tx)
 
-    # Display transactions with input/output counts
     st.subheader(f"📋 Transactions Involved ({len(coinjoin_transactions)})")
     if coinjoin_transactions:
         st.dataframe(pd.DataFrame([{
@@ -850,7 +726,6 @@ def display_coinjoin_analysis():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Pattern visualization
         st.subheader("Pattern Visualization")
         coinjoin_addresses = [addr for addr in filtered_graph.nodes() if 'coinjoin' in addr]
         coinjoin_subgraph = None
@@ -866,26 +741,28 @@ def display_coinjoin_analysis():
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Pattern analysis with multiple fallback strategies
         st.subheader("🎯 Pattern Analysis")
         
+        # Try multiple approaches to find a coinjoin transaction
         coinjoin_tx = None
         
-        # Find best CoinJoin transaction for analysis
+        # First, try to find by meta pattern
         for tx in coinjoin_transactions:
             if hasattr(tx, 'meta') and tx.meta and tx.meta.get('pattern') == 'coinjoin':
                 coinjoin_tx = tx
                 break
         
+        # If not found, use any coinjoin transaction from the filtered list
         if not coinjoin_tx and coinjoin_transactions:
-            coinjoin_tx = coinjoin_transactions[0]
+            coinjoin_tx = coinjoin_transactions[0]  # Use the first available
         
-        # Fallback to synthetic analysis if no real transaction found
+        # If still not found, create a synthetic analysis target
         if not coinjoin_tx and coinjoin_addresses:
+            # Create a mock transaction data for analysis
             target_address = coinjoin_addresses[0]
             st.info(f"Analyzing CoinJoin pattern for address: {target_address}")
             
-            # Create synthetic transaction data for analysis
+            # Mock transaction data for demonstration
             transaction_data = {
                 'inputs': [{'address': f'input_{i}', 'value': 0.1} for i in range(3)],
                 'outputs': [{'address': f'output_{i}', 'value': 0.1} for i in range(3)]
@@ -910,8 +787,8 @@ def display_coinjoin_analysis():
             if coinjoin_subgraph is not None and fig is not None:
                 export_pattern_assets(coinjoin_subgraph, fig, "coinjoin", target_address, detection_results)
         
-        # Analysis with real transaction data
         elif coinjoin_tx:
+            # Original logic for when we have a proper coinjoin transaction
             transaction_data = {
                 'inputs': coinjoin_tx.inputs if hasattr(coinjoin_tx, 'inputs') else [],
                 'outputs': coinjoin_tx.outputs if hasattr(coinjoin_tx, 'outputs') else []
@@ -936,15 +813,13 @@ def display_coinjoin_analysis():
                 export_pattern_assets(coinjoin_subgraph, fig, "coinjoin", coinjoin_tx.txid, detection_results)
         
         else:
-            # No CoinJoin data available
+            # No coinjoin data available
             st.warning("⚠️ No CoinJoin transactions found for analysis.")
             st.info("CoinJoin patterns require transactions with multiple inputs and outputs. Load data containing CoinJoin transactions to see analysis.")
 
-# Displays UI and analysis for rapid movement detection
 def display_rapid_movement_analysis():
     st.header("⚡ Rapid Movement Detection")
     
-    # Pattern explanation
     st.subheader("Pattern Explanation")
     st.write("""
     Rapid Movement involves:
@@ -954,10 +829,10 @@ def display_rapid_movement_analysis():
     4) Often used to stay ahead of investigation timelines.
     """)
 
-    # Filter and find rapid movement transactions
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
+    # Show transactions involved
     win_start = pd.to_datetime(start_dt, utc=True) if start_dt else None
     win_end = pd.to_datetime(end_dt, utc=True) if end_dt else None
     
@@ -968,7 +843,6 @@ def display_rapid_movement_analysis():
             if (not pd.isna(tt)) and (win_start is None or tt >= win_start) and (win_end is None or tt <= win_end):
                 rapid_transactions.append(tx)
 
-    # Display transactions table
     st.subheader(f"📋 Transactions Involved ({len(rapid_transactions)})")
     if rapid_transactions:
         st.dataframe(pd.DataFrame([{
@@ -983,7 +857,6 @@ def display_rapid_movement_analysis():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Pattern visualization
         st.subheader("Pattern Visualization")
         rapid_addresses = [addr for addr in filtered_graph.nodes() if 'rapid_addr' in addr]
         rapid_subgraph = None
@@ -999,7 +872,6 @@ def display_rapid_movement_analysis():
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Pattern analysis
         st.subheader("🎯 Pattern Analysis")
         target_address = "rapid_addr_0"
         
@@ -1026,11 +898,9 @@ def display_rapid_movement_analysis():
             st.warning("⚠️ No rapid movement addresses found for analysis.")
             st.info("Rapid movement patterns require sequential fast transfers. Load data containing rapid movement transactions to see analysis.")
 
-# Displays UI and analysis for layering (complex obfuscation) detection
 def display_layering_analysis():
     st.header("🕸️ Layering (Complex Obfuscation)")
     
-    # Pattern explanation
     st.subheader("Pattern Explanation")
     st.write("""
     Layering is a sophisticated technique involving:
@@ -1040,10 +910,10 @@ def display_layering_analysis():
     4) Creates maximum entropy in the audit trail.
     """)
 
-    # Filter and find layering transactions
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
+    # Show transactions involved
     win_start = pd.to_datetime(start_dt, utc=True) if start_dt else None
     win_end = pd.to_datetime(end_dt, utc=True) if end_dt else None
     
@@ -1054,7 +924,6 @@ def display_layering_analysis():
             if (not pd.isna(tt)) and (win_start is None or tt >= win_start) and (win_end is None or tt <= win_end):
                 layer_transactions.append(tx)
 
-    # Display transactions table
     st.subheader(f"📋 Transactions Involved ({len(layer_transactions)})")
     if layer_transactions:
         st.dataframe(pd.DataFrame([{
@@ -1069,7 +938,6 @@ def display_layering_analysis():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Pattern visualization
         st.subheader("Pattern Visualization")
         layer_addresses = [addr for addr in filtered_graph.nodes() if 'layer_' in addr]
         layer_subgraph = None
@@ -1085,7 +953,6 @@ def display_layering_analysis():
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Pattern analysis
         st.subheader("🎯 Pattern Analysis")
         target_address = "layer_source"
         
@@ -1112,11 +979,9 @@ def display_layering_analysis():
             st.warning("⚠️ No layering source addresses found for analysis.")
             st.info("Layering patterns require complex multi-stage movements. Load data containing layering transactions to see analysis.")
 
-# Displays UI and analysis for terrorist financing crowdfunding detection
 def display_tf_crowdfunding_analysis():
     st.header("💰 Terrorist Financing Crowdfunding")
     
-    # Pattern explanation
     st.subheader("Pattern Explanation")
     st.write("""
     TF Crowdfunding involves:
@@ -1126,10 +991,10 @@ def display_tf_crowdfunding_analysis():
     4) Exploits cryptocurrency's pseudonymous nature.
     """)
 
-    # Filter and find TF crowdfunding transactions
     start_dt, end_dt = st.session_state.view_time_range if st.session_state.view_time_range else (None, None)
     filtered_graph = filter_graph_by_time(st.session_state.graph, start_dt, end_dt)
 
+    # Show transactions involved
     win_start = pd.to_datetime(start_dt, utc=True) if start_dt else None
     win_end = pd.to_datetime(end_dt, utc=True) if end_dt else None
     
@@ -1140,7 +1005,6 @@ def display_tf_crowdfunding_analysis():
             if (not pd.isna(tt)) and (win_start is None or tt >= win_start) and (win_end is None or tt <= win_end):
                 tf_transactions.append(tx)
 
-    # Display transactions table
     st.subheader(f"📋 Transactions Involved ({len(tf_transactions)})")
     if tf_transactions:
         st.dataframe(pd.DataFrame([{
@@ -1155,7 +1019,6 @@ def display_tf_crowdfunding_analysis():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        # Pattern visualization
         st.subheader("Pattern Visualization")
         tf_addresses = [addr for addr in filtered_graph.nodes() if ('tf_donor' in addr or 'tf_target' in addr)]
         tf_subgraph = None
@@ -1171,7 +1034,6 @@ def display_tf_crowdfunding_analysis():
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        # Pattern analysis
         st.subheader("🎯 Pattern Analysis")
         target_address = "tf_target_001"
         
@@ -1198,14 +1060,89 @@ def display_tf_crowdfunding_analysis():
             st.warning("⚠️ No TF crowdfunding target addresses found for analysis.")
             st.info("TF crowdfunding patterns require multiple donors to same target. Load data containing TF transactions to see analysis.")
 
-# Displays graph statistics in the sidebar
+def display_chain_hopping_analysis():
+    st.header("🔗 Cross-Chain Money Laundering")
+    
+    st.subheader("Pattern Explanation")
+    st.write("""
+    Chain hopping involves:
+    1) Moving funds from Bitcoin to an exchange/bridge,
+    2) Converting BTC to ETH (or other cryptocurrencies),
+    3) Moving the converted funds to different addresses,
+    4) Using multiple blockchains to obfuscate the money trail.
+    """)
+
+    if not st.session_state.chain_hop_events:
+        st.warning("⚠️ No chain hopping events detected. Enable cross-chain analysis in the sidebar and load both Bitcoin and Ethereum data.")
+        return
+
+    # Display detected events
+    st.subheader(f"🔍 Detected Events ({len(st.session_state.chain_hop_events)})")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Create DataFrame for events
+        events_data = []
+        for event in st.session_state.chain_hop_events:
+            try:
+                btc_time = event.btc_time if hasattr(event.btc_time, 'isoformat') else pd.to_datetime(event.btc_time)
+                eth_time = event.eth_time if hasattr(event.eth_time, 'isoformat') else pd.to_datetime(event.eth_time)
+                time_gap = abs((eth_time - btc_time).total_seconds() / 3600)
+                
+                events_data.append({
+                    'BTC Transaction': event.btc_txid[:16] + '...' if event.btc_txid else 'N/A',
+                    'BTC → Exchange': event.btc_out_addr[:16] + '...' if event.btc_out_addr else 'N/A',
+                    'Exchange → ETH': event.eth_in_addr[:16] + '...' if event.eth_in_addr else 'N/A',
+                    'Time Gap (hours)': round(time_gap, 2),
+                    'Route': event.label if hasattr(event, 'label') else 'Unknown'
+                })
+            except Exception as e:
+                st.error(f"Error processing event: {e}")
+                continue
+
+        if events_data:
+            df = pd.DataFrame(events_data)
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.warning("No valid event data to display")
+
+        # Visualization placeholder
+        st.subheader("Cross-Chain Flow Visualization")
+        st.info("🚧 Advanced cross-chain visualization coming soon. Current detection shows exchange routing patterns.")
+
+    with col2:
+        st.subheader("🎯 Pattern Analysis")
+        
+        # Run chain hopping detection
+        target_address = st.text_input("Target Address:", value="1DEP8i3QJCsomS4BSMY2RpU1upv62aGvhD")
+        
+        if target_address:
+            detection_results = st.session_state.detector.detect_chain_hopping(
+                st.session_state.chain_hop_events,
+                target_address
+            )
+
+            risk_score, risk_level, _ = st.session_state.scorer.compute_risk_score({'chain_hopping': detection_results})
+            icon, level_text = {'LOW': ('🟢', 'Low'), 'MEDIUM': ('🟡', 'Medium'), 'HIGH': ('🔴', 'High')}.get(risk_level, ('⚪', 'Unknown'))
+            
+            st.markdown(f"### Risk Level: {icon} **{level_text}**")
+            st.metric("Risk Score", f"{risk_score:.3f}")
+            st.metric("Confidence", f"{detection_results['confidence']:.3f}")
+
+            st.subheader("🔍 Evidence")
+            if detection_results.get('evidence'):
+                st.json(detection_results['evidence'])
+
+            st.subheader("📄 Explanation")
+            st.info(detection_results['explanation'])
+
 def display_graph_statistics():
     if not st.session_state.graph:
         return
 
     st.subheader("Graph Statistics")
     
-    # Calculate basic graph metrics
     if len(st.session_state.graph.nodes()) > 0:
         degree_dict = dict(st.session_state.graph.degree())
         total_degree = sum(degree_dict.values())
@@ -1217,11 +1154,9 @@ def display_graph_statistics():
             "Avg Degree": f"{avg_degree:.2f}"
         }
         
-        # Display metrics
         for stat_name, stat_value in stats.items():
             st.metric(stat_name, stat_value)
 
-    # Display node classification breakdown
     st.subheader("Node Classifications")
     classifications = {}
     for node in st.session_state.graph.nodes():
@@ -1231,7 +1166,6 @@ def display_graph_statistics():
     for cls, count in classifications.items():
         st.metric(cls.title(), count)
 
-# Stores analysis results in session state for later export
 def store_analysis_results(pattern_name, target_address, detection_results):
     risk_score, risk_level, risk_summary = st.session_state.scorer.compute_risk_score({pattern_name: detection_results})
     
@@ -1243,21 +1177,18 @@ def store_analysis_results(pattern_name, target_address, detection_results):
         'risk_summary': risk_summary
     }
 
-# Generates and provides download for SAR (Suspicious Activity Report)
 def generate_and_download_sar():
     if 'analysis_results' not in st.session_state:
         st.warning("No analysis results available")
         return
 
     results = st.session_state.analysis_results
-    # Generate complete SAR report
     sar_report = st.session_state.sar_generator.generate_sar_report(
         results['target_address'],
         results['risk_summary'],
         results['detection_results']
     )
 
-    # Provide JSON download
     report_json = json.dumps(sar_report, indent=2)
     st.download_button(
         label="📄 Download SAR Report",
@@ -1266,17 +1197,14 @@ def generate_and_download_sar():
         mime="application/json"
     )
 
-    # Show preview in expandable section
     with st.expander("SAR Report Preview"):
         st.json(sar_report)
 
-# Exports complete graph data as JSON download
 def export_graph_data():
     if not st.session_state.graph:
         st.warning("No graph data available")
         return
 
-    # Convert graph to exportable format
     nodes_data = []
     for node in st.session_state.graph.nodes(data=True):
         node_dict = {'id': node[0]}
@@ -1289,7 +1217,6 @@ def export_graph_data():
         edge_dict.update(edge[2])
         edges_data.append(edge_dict)
 
-    # Create export package with metadata
     export_data = {
         'nodes': nodes_data,
         'edges': edges_data,
@@ -1300,7 +1227,6 @@ def export_graph_data():
         }
     }
 
-    # Provide JSON download
     export_json = json.dumps(export_data, indent=2)
     st.download_button(
         label="📈 Download Graph Data",
@@ -1309,6 +1235,5 @@ def export_graph_data():
         mime="application/json"
     )
 
-# Entry point: launch the Streamlit app
 if __name__ == "__main__":
     main()
