@@ -28,6 +28,23 @@ Real-time blockchain analysis with 7 detection algorithms for identifying suspic
 - Time-window filtering and analysis
 - Cross-chain laundering detection
 
+### 🚨 **Alerts System**
+CryptoSherlock X incorporates an advanced Alerts System designed for continuous monitoring and timely notifications of suspicious activities across blockchain transactions.
+
+Key Features:
+-Real-Time Alerts
+-Multi-Level Risk Classification
+-Pattern-Based Detection
+-Continuous Surveillance
+-Integrated Alert Management
+-Automated Re-Analysis
+
+**Operational Benefits:**
+      -Enables swift response to potential illicit transactions
+      -Enhances investigative situational awareness through structured and explainable alerts
+      -Supports compliance by notifying of transactions that may require filing Suspicious Activity Reports
+      -Provides real-time monitoring capabilities with configurable thresholds and detailed evidence tracking
+
 ### 📊 **Professional Reporting**
 - **SAR (Suspicious Activity Report)** generation
 - Pattern-specific evidence exports
